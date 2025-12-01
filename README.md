@@ -8,6 +8,7 @@ it uses wasapi loopback to record any incoming audio.
 
 **buttons**
 - record
+- cycle visualizer
 - reel spin
 
 **slider**	
@@ -20,4 +21,5 @@ it uses wasapi loopback to record any incoming audio.
 
 
 this program is free and [donations are welcome](https://ko-fi.com/geltz)
+
 
