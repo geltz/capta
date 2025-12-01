@@ -6,7 +6,7 @@ capta is a desktop audio recorder and visualizer.
 
 it uses wasapi loopback to record any incoming audio.	
 
-**button**
+**buttons**
 - record
 - reel spin
 
@@ -20,3 +20,4 @@ it uses wasapi loopback to record any incoming audio.
 
 
 this program is free and [donations are welcome](https://ko-fi.com/geltz)
+
