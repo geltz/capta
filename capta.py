@@ -1065,11 +1065,24 @@ class MainWindow(QMainWindow):
         self.saver.start()
 
     def on_save_finished(self, success, msg):
+        # If the user has already started a NEW session (Armed or Recording)
+        # while the previous save was finishing, don't overwrite the status text at all.
+        if self.is_armed or self.btn_record.is_recording:
+            return
+
         if success:
             self.lbl_status.setText(msg)
             self.lbl_status.setStyleSheet("color: #68d391; font-family: 'Segoe UI'; font-size: 11px; font-weight: bold;")
-            QTimer.singleShot(2000, lambda: self.lbl_status.setText("ready"))
-            QTimer.singleShot(2000, lambda: self.lbl_status.setStyleSheet("color: #cbd5e0; font-family: 'Segoe UI'; font-size: 11px; font-weight: bold;"))
+            
+            # Define a safe reset function
+            def safe_reset():
+                # Only reset to 'ready' if we are currently IDLE.
+                # If we are Armed (waiting) or Recording, do NOT change the text.
+                if not self.is_armed and not self.btn_record.is_recording:
+                    self.lbl_status.setText("ready")
+                    self.lbl_status.setStyleSheet("color: #cbd5e0; font-family: 'Segoe UI'; font-size: 11px; font-weight: bold;")
+
+            QTimer.singleShot(2000, safe_reset)
         else:
             self.lbl_status.setText(msg)
             self.lbl_status.setStyleSheet("color: #f56565; font-family: 'Segoe UI'; font-size: 11px; font-weight: bold;")
