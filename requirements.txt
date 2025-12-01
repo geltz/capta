@@ -1,0 +1,5 @@
+numpy
+scipy
+soundfile
+pyaudiowpatch
+PyQt6
