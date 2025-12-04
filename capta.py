@@ -10,7 +10,7 @@ import multiprocessing
 import queue
 
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QTimer, QRectF, QPointF, 
-                          QObject)
+                          QObject, QElapsedTimer)
 from PyQt6.QtGui import (QColor, QPainter, QLinearGradient, QPen, QPainterPath, 
                          QBrush, QFont, QRadialGradient, QIcon, QPolygonF, 
                          QImage, qRgba)
@@ -421,32 +421,64 @@ class WaveformStrip(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(60)
-        # Increased buffer slightly for a denser "bar" look
+        # Initialize buffer FULL of zeros so width is stable from start
         self.buffer = collections.deque([0.0]*160, maxlen=160)
         self.state_buffer = collections.deque([False]*160, maxlen=160) 
         self.is_rec = False
         self.hue = 0.0
         self.tape_anim_val = 0.0
+        
+        self.scroll_phase = 0.0  
+        self.ms_per_chunk = (1024 / 48000) * 1000 
+        
+        self.last_time = QElapsedTimer()
+        self.last_time.start()
+        
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self.animate_frame)
+        self.anim_timer.start(7) 
 
     def push_data(self, chunk, is_rec):
         self.is_rec = is_rec
         if len(chunk) == 0: val = 0.0
         else: 
-            # CHANGED: Reduced multiplier from 3.5 to 1.5 
-            # This makes the input sensitivity lower
             val = np.sqrt(np.mean(chunk**2)) * 1.5
         
-        last = self.buffer[-1] if self.buffer else 0.0
+        last = self.buffer[-1] 
         val = last * 0.6 + val * 0.4 
+        
         self.buffer.append(val)
         self.state_buffer.append(is_rec)
         
-        target = 1.0 if is_rec else 0.0
-        self.tape_anim_val += (target - self.tape_anim_val) * 0.1
-        self.update()
+        # --- FIX: Clamp the phase ---
+        # If we receive a burst of audio chunks, scroll_phase attempts to add 1.0 for each.
+        # If it grows > 1.5, we are lagging. Cap it at 1.5 to prevent the waveform 
+        # from "drifting" off the left side of the screen.
+        self.scroll_phase = min(self.scroll_phase + 1.0, 1.5)
 
     def set_hue(self, h):
         self.hue = h
+
+    def animate_frame(self):
+        target = 1.0 if self.is_rec else 0.0
+        diff = target - self.tape_anim_val
+        if abs(diff) > 0.001:
+            self.tape_anim_val += diff * 0.1
+            
+        dt = self.last_time.restart()
+        
+        # Logic: If phase is high (burst catch-up), drain slightly faster
+        # This helps maintain smoothness without snapping
+        speed_mult = 1.0
+        if self.scroll_phase > 1.1: speed_mult = 1.5
+        
+        decrement = (dt / self.ms_per_chunk) * speed_mult
+        
+        if self.scroll_phase > 0:
+            self.scroll_phase -= decrement
+            if self.scroll_phase < 0:
+                self.scroll_phase = 0.0
+                
         self.update()
 
     def paintEvent(self, event):
@@ -457,63 +489,52 @@ class WaveformStrip(QWidget):
         cy = h / 2.0
         count = len(self.buffer)
         
-        if count < 2: return
-
-        # Geometry
-        # Calculate spacing so it fills the width
-        step_x = w / (count - 1)
-        # Bar width is slightly less than step to leave a tiny gap
+        step_x = w / max(1, count - 1)
         pen_width = max(1.5, step_x * 0.7)
         
-        # Colors
-        # Idle: Very subtle pastel
         c_idle = QColor.fromHslF(self.hue, 0.35, 0.75)
-        # Recording: Saturated Salmon
         c_rec = QColor.fromHslF(0.0, 0.85, 0.65)
         
-        # Pen setup
         pen = QPen()
         pen.setWidthF(pen_width)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
 
-        for i, val in enumerate(self.buffer):
-            # 1. Logic: Position
-            x = i * step_x
+        for i in range(count):
+            # Calculate X. 
+            # (i - 1) is the base position because we just shifted left.
+            # (+ scroll_phase) interpolates it back to the right.
+            draw_pos_x = (i - 1 + self.scroll_phase) * step_x
             
-            # 2. Logic: Height (Amplitude)
-            # Base height
+            # Optimization: Skip drawing if out of bounds
+            if draw_pos_x < -step_x or draw_pos_x > w + step_x:
+                continue
+            
+            val = self.buffer[i]
             amp = max(2.0, val * h * 0.6)
             
-            # 3. Logic: Fading (Left/Right Edges)
-            # Create a "Hanning Window" curve (0 -> 1 -> 0)
-            norm_x = i / count
+            # Fade Edges based on screen position, not index
+            # This ensures the fade mask stays static while bars move through it
+            norm_x = draw_pos_x / w
+            norm_x = max(0.0, min(1.0, norm_x))
             edge_factor = np.sin(norm_x * np.pi)
             
-            # Apply fade to height (Bars get shorter at edges)
-            draw_h = amp * pow(edge_factor, 0.3) 
+            draw_h = amp * pow(edge_factor, 0.3)
             
-            # 4. Logic: Color & Opacity
             is_recording_slice = self.state_buffer[i]
-            
             if is_recording_slice:
                 base_c = c_rec
-                # Recording bars are fully opaque in center, fade at edges
                 alpha = 255 * edge_factor
             else:
                 base_c = c_idle
-                # Idle bars are naturally more transparent + edge fade
                 alpha = 180 * edge_factor
 
-            # Apply Alpha
             final_c = QColor(base_c)
             final_c.setAlpha(int(alpha))
             
-            # Draw
             pen.setColor(final_c)
             painter.setPen(pen)
             
-            # Draw vertical line centered at cy
-            painter.drawLine(QPointF(x, cy - draw_h/2), QPointF(x, cy + draw_h/2))
+            painter.drawLine(QPointF(draw_pos_x, cy - draw_h/2), QPointF(draw_pos_x, cy + draw_h/2))
 
 class VisualizerPanel(QWidget):
     MODE_BARS = 0
