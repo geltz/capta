@@ -276,6 +276,9 @@ class CaptaLogo(QWidget):
         rect = self.rect()
         cy, cx = rect.height() / 2, rect.width() / 2
         
+        # Matches the app background to mask the bar behind the reels
+        bg_color = QColor("#f7fafc")
+        
         grad = QLinearGradient(0, 0, rect.width(), 0)
         grad.setColorAt(0.0, QColor.fromHslF(self.base_hue, 0.6, 0.75))
         grad.setColorAt(1.0, QColor.fromHslF((self.base_hue + 0.15) % 1.0, 0.6, 0.75))
@@ -283,35 +286,33 @@ class CaptaLogo(QWidget):
         
         # --- Pen Config ---
         
-        # 1. Core Pen (Slightly thickened from original)
+        # 1. Core Pen 
         pen_core = QPen(brush, 2.8) 
         pen_core.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen_core.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
 
-        # 2. Feather Pen (Tight, subtle blur)
-        # Only 1.2px wider than core (0.6px per side) -> tighter blur
+        # 2. Feather Pen (Subtle glow)
         pen_blur = QPen(brush, 4.0) 
         pen_blur.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen_blur.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
 
-        painter.setBrush(Qt.BrushStyle.NoBrush)
+        # --- 1. Draw Connecting Line First (Behind) ---
         
-        # --- Drawing ---
-
-        # 1. Top Connecting Line
-        # Pass A: Feather (Very Low Opacity)
+        # Pass A: Feather
         painter.setPen(pen_blur)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setOpacity(self.current_opacity * 0.15) 
         painter.drawLine(QPointF(cx - self.offset_x, cy - self.radius), 
                          QPointF(cx + self.offset_x, cy - self.radius))
         
-        # Pass B: Core (Sharp)
+        # Pass B: Core
         painter.setPen(pen_core)
         painter.setOpacity(self.current_opacity)
         painter.drawLine(QPointF(cx - self.offset_x, cy - self.radius), 
                          QPointF(cx + self.offset_x, cy - self.radius))
                          
-        # 2. Reels
+        # --- 2. Draw Reels On Top ---
+        
         def draw_reel(center, offset):
             painter.save()
             painter.translate(center)
@@ -323,17 +324,25 @@ class CaptaLogo(QWidget):
                 theta = (i / 3.0) * 2 * math.pi
                 spokes.append(QPointF(math.cos(theta)*self.radius, math.sin(theta)*self.radius))
 
-            # Pass A: Feather
+            # Pass A: Feather (Glow)
+            # No fill here, just the outer glow
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(pen_blur)
             painter.setOpacity(self.current_opacity * 0.15)
             painter.drawEllipse(p_center, self.radius, self.radius)
             for pt in spokes:
                 painter.drawLine(p_center, pt)
 
-            # Pass B: Core
+            # Pass B: Core (Structure)
+            # Fill with BG color to mask the connecting bar behind it
+            painter.setBrush(bg_color) 
             painter.setPen(pen_core)
             painter.setOpacity(self.current_opacity)
+            
+            # Draw circle (fills the center, hiding the bar end)
             painter.drawEllipse(p_center, self.radius, self.radius)
+            
+            # Draw spokes (on top of the fill)
             for pt in spokes:
                 painter.drawLine(p_center, pt)
 
@@ -553,46 +562,30 @@ class VisualizerPanel(QWidget):
         num_bars = len(self.target_bars)
         
         if len(fft_d) > 0:
-            # --- FIX: Smooth Interpolation vs. Peak Binning ---
-            # We use float boundaries to prevent "stepping" at low frequencies.
-            
-            # Create logarithmic edges (indices) as floats
-            # Start at index 1 to skip DC offset, go to end of array
             edges = np.logspace(0, np.log10(len(fft_d)-1), num_bars + 1)
-            
             new_targets = []
             for i in range(num_bars):
                 low_f = edges[i]
                 high_f = edges[i+1]
-                
                 width = high_f - low_f
-                
-                # Logic: If the bin is narrower than 1 index (Low Freqs),
-                # we must interpolate to get a unique value for this bar.
                 if width < 1.0:
                     mid = (low_f + high_f) / 2.0
                     idx_0 = int(mid)
-                    # Safety clamp
                     idx_1 = min(idx_0 + 1, len(fft_d) - 1)
-                    
-                    # Linear Interpolation
                     t = mid - idx_0
                     val = fft_d[idx_0] * (1 - t) + fft_d[idx_1] * t
                 else:
-                    # Logic: If the bin is wide (High Freqs), 
-                    # we take the MAX to ensure we catch loud treble sounds.
                     start_idx = int(low_f)
                     end_idx = int(np.ceil(high_f))
                     chunk = fft_d[start_idx:end_idx]
                     val = np.max(chunk) if len(chunk) > 0 else 0.0
-                
                 new_targets.append(val)
             
             new_targets = np.array(new_targets)
             new_targets = np.log10(new_targets + 1) * 0.3
             self.target_bars = new_targets
 
-        # Spectro buffer logic unchanged...
+        # Spectro buffer logic
         self.spec_buffer = np.roll(self.spec_buffer, -1, axis=1)
         if len(fft_d) > 0:
             fft_log = np.log10(fft_d + 1e-9)
@@ -614,6 +607,8 @@ class VisualizerPanel(QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
+        # CHANGED: Enable Antialiasing globally. This ensures the clipping path (rounded corners) is smooth.
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         
         w, h = self.width(), self.height()
         rect = self.rect()
@@ -628,13 +623,13 @@ class VisualizerPanel(QWidget):
         p.setClipPath(path)
         
         if self.mode == self.MODE_BARS: 
-            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             self.draw_bars(p, w, h)
         elif self.mode == self.MODE_SCOPE:
-            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             self.draw_scope(p, w, h)
         elif self.mode == self.MODE_SPECTRO: 
-            p.setRenderHint(QPainter.RenderHint.Antialiasing, False) 
+            # CHANGED: Removed the line that disabled Antialiasing.
+            # Added SmoothPixmapTransform for better internal image scaling.
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
             self.draw_spectro(p, w, h)
             
         # Label
@@ -654,10 +649,6 @@ class VisualizerPanel(QWidget):
             y = h - bar_h - 10
             
             c = QColor.fromHslF(self.hue, 0.65, 0.7)
-            
-            # --- FIX: Dynamic Opacity ---
-            # Map the value (approx 0.0 to 1.0) to an Alpha range (60 to 255)
-            # 60 = very transparent (quiet), 255 = solid (loud)
             alpha = int(min(255, max(60, 60 + (val * 220))))
             c.setAlpha(alpha)
             
@@ -668,27 +659,20 @@ class VisualizerPanel(QWidget):
     def draw_scope(self, p, w, h):
         cy = h / 2
         data = self.raw_audio_buffer
-
-        # Find the first point where the wave crosses from negative to positive.
-        # This locks the visual in place.
         trigger_offset = 0
-        for i in range(len(data) - 100): # Scan first portion
+        for i in range(len(data) - 100):
             if data[i] <= 0 and data[i+1] > 0:
                 trigger_offset = i
                 break
         
-        # Start the view from the trigger point
         view = data[trigger_offset:]
-
         step = 2 
         view = view[::step]
         
         if len(view) < 2: return
         
         path = QPainterPath()
-
         amp_scale = 0.25
-        
         path.moveTo(0, cy + (view[0] * h * amp_scale))
         x_step = w / len(view)
         
@@ -700,28 +684,17 @@ class VisualizerPanel(QWidget):
         p.drawPath(path)
 
     def draw_spectro(self, p, w, h):
-        # Convert float buffer (0..1) to uint8 (0..255)
-        # We perform a slight power curve here to darken silence (gamma correction)
-        # Power of 1.5 makes low values lower (cleaner background)
         display_data = np.power(self.spec_buffer, 1.5)
         buf = (display_data * 255).astype(np.uint8)
         
         h_buf, w_buf = buf.shape
-        
-        # Create Indexed8 Image (Palette based)
         qimg = QImage(buf.data, w_buf, h_buf, w_buf, QImage.Format.Format_Indexed8)
         
-        # Generate Color Table based on current Hue
-        # 0 = Transparent, 255 = Full Color
         base_c = QColor.fromHslF(self.hue, 0.8, 0.5)
         r, g, b, _ = base_c.getRgb()
-        
-        # List comprehension is fast enough for 256 items
-        # i is alpha
         color_table = [qRgba(r, g, b, int(i * 0.9)) for i in range(256)]
         qimg.setColorTable(color_table)
         
-        # Draw image stretched to widget size
         p.drawImage(QRectF(0, 0, w, h), qimg)
 
 class HueSlider(QSlider):
