@@ -249,22 +249,20 @@ class CaptaLogo(QWidget):
         self.update()
         
     def enterEvent(self, event):
-        self.target_opacity = 1.0 # Fully opaque/saturated on hover
+        self.target_opacity = 1.0 
         super().enterEvent(event)
         
     def leaveEvent(self, event):
-        self.target_opacity = 0.6 # Faded when idle
+        self.target_opacity = 0.6 
         super().leaveEvent(event)
         
     def animate(self):
-        # Physics for rotation speed
         if self.speed > self.target_speed:
             self.speed = self.speed * 0.95 + self.target_speed * 0.05
             
         self.phase = (self.phase + self.speed) % (2 * math.pi)
         self.base_hue = (self.base_hue + 0.002) % 1.0
         
-        # Physics for opacity
         diff = self.target_opacity - self.current_opacity
         if abs(diff) > 0.001:
             self.current_opacity += diff * 0.1
@@ -275,31 +273,70 @@ class CaptaLogo(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        painter.setOpacity(self.current_opacity)
-        
         rect = self.rect()
         cy, cx = rect.height() / 2, rect.width() / 2
         
         grad = QLinearGradient(0, 0, rect.width(), 0)
         grad.setColorAt(0.0, QColor.fromHslF(self.base_hue, 0.6, 0.75))
         grad.setColorAt(1.0, QColor.fromHslF((self.base_hue + 0.15) % 1.0, 0.6, 0.75))
+        brush = QBrush(grad)
         
-        pen = QPen(QBrush(grad), 2.5) 
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
+        # --- Pen Config ---
+        
+        # 1. Core Pen (Slightly thickened from original)
+        pen_core = QPen(brush, 2.8) 
+        pen_core.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen_core.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+
+        # 2. Feather Pen (Tight, subtle blur)
+        # Only 1.2px wider than core (0.6px per side) -> tighter blur
+        pen_blur = QPen(brush, 4.0) 
+        pen_blur.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen_blur.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+
         painter.setBrush(Qt.BrushStyle.NoBrush)
         
+        # --- Drawing ---
+
+        # 1. Top Connecting Line
+        # Pass A: Feather (Very Low Opacity)
+        painter.setPen(pen_blur)
+        painter.setOpacity(self.current_opacity * 0.15) 
+        painter.drawLine(QPointF(cx - self.offset_x, cy - self.radius), 
+                         QPointF(cx + self.offset_x, cy - self.radius))
+        
+        # Pass B: Core (Sharp)
+        painter.setPen(pen_core)
+        painter.setOpacity(self.current_opacity)
         painter.drawLine(QPointF(cx - self.offset_x, cy - self.radius), 
                          QPointF(cx + self.offset_x, cy - self.radius))
                          
+        # 2. Reels
         def draw_reel(center, offset):
             painter.save()
             painter.translate(center)
             painter.rotate(math.degrees(self.phase + offset))
-            painter.drawEllipse(QPointF(0, 0), self.radius, self.radius)
+            
+            p_center = QPointF(0, 0)
+            spokes = []
             for i in range(3):
                 theta = (i / 3.0) * 2 * math.pi
-                painter.drawLine(QPointF(0,0), QPointF(math.cos(theta)*self.radius, math.sin(theta)*self.radius))
+                spokes.append(QPointF(math.cos(theta)*self.radius, math.sin(theta)*self.radius))
+
+            # Pass A: Feather
+            painter.setPen(pen_blur)
+            painter.setOpacity(self.current_opacity * 0.15)
+            painter.drawEllipse(p_center, self.radius, self.radius)
+            for pt in spokes:
+                painter.drawLine(p_center, pt)
+
+            # Pass B: Core
+            painter.setPen(pen_core)
+            painter.setOpacity(self.current_opacity)
+            painter.drawEllipse(p_center, self.radius, self.radius)
+            for pt in spokes:
+                painter.drawLine(p_center, pt)
+
             painter.restore()
             
         draw_reel(QPointF(cx - self.offset_x, cy), 0)
