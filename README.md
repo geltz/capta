@@ -16,9 +16,4 @@ it uses wasapi loopback to record any incoming audio.
 **visualizers**		
 - bars	
 - scope	
-- spectral	
-
-this program is free and [donations are welcome](https://ko-fi.com/geltz)
-
-
-
+- spectral
